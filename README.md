@@ -35,7 +35,7 @@ pip install pymongo
 3. Run the Python script in both terminal windows:
 
 ```bash
-python3 p2p_chat.py
+python3 p2p_chat2.py
 ```
 
 4. In one terminal, register a new user or log in with an existing user.
