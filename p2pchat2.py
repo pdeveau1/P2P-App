@@ -1,3 +1,5 @@
+# EC530 P2P Chat App Python - Paige DeVeau and Abhinoor Singh 2023
+
 import socket
 import threading
 import json
@@ -5,14 +7,55 @@ import base64
 import os
 import random
 import pymongo
+import hashlib
 from getpass import getpass
+from cryptography.fernet import Fernet
 
 # Establish a connection to the MongoDB server
 mongo_client = pymongo.MongoClient("mongodb+srv://abhinoorbu:rkgy2pemFiKx3UWr@cluster0.o0mejie.mongodb.net/?retryWrites=true&w=majority")
 chat_db = mongo_client["chat_db"]
 users_col = chat_db["users"]
 
-def handle_client(conn, addr, username):
+
+def load_chat_history(auth_hash):
+    try:
+        with open(f"{auth_hash}.json", "r") as f:
+            encrypted_data = f.read()
+            decrypted_data = decrypt_data(encrypted_data.encode())
+            chat_history = json.loads(decrypted_data)
+            return chat_history
+    except FileNotFoundError:
+        return {}
+
+
+def save_chat_history(auth_hash, peer_username, message):
+    chat_history = load_chat_history(auth_hash)
+    if peer_username not in chat_history:
+        chat_history[peer_username] = []
+
+    chat_history[peer_username].append(message)
+    encrypted_data = encrypt_data(json.dumps(chat_history).encode())
+    with open(f"{auth_hash}.json", "w") as f:
+        f.write(encrypted_data.decode())
+
+
+def generate_key(auth_hash):
+    return base64.urlsafe_b64encode(hashlib.sha256(auth_hash.encode()).digest())
+
+
+def encrypt_data(data):
+    key = generate_key(auth_hash)
+    cipher_suite = Fernet(key)
+    return cipher_suite.encrypt(data)
+
+
+def decrypt_data(encrypted_data):
+    key = generate_key(auth_hash)
+    cipher_suite = Fernet(key)
+    return cipher_suite.decrypt(encrypted_data)
+
+
+def handle_client(conn, addr, username, auth_hash):
     print(f"[NEW CONNECTION] {addr} connected.")
     connected = True
     while connected:
@@ -20,12 +63,15 @@ def handle_client(conn, addr, username):
         if not msg or msg.lower() == "exit":
             print(f"{username} has left the chat.")
             break
+
+        sender_username = msg.split(": ")[0]
+        save_chat_history(auth_hash, sender_username, msg)
         print(f"[{username}] {msg}")
 
     conn.close()
 
 
-def start_server(username, port):
+def start_server(username, auth_hash, port):
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.bind(('0.0.0.0', port))
     server.listen()
@@ -33,15 +79,27 @@ def start_server(username, port):
 
     while True:
         conn, addr = server.accept()
-        thread = threading.Thread(target=handle_client, args=(conn, addr, username))
+        thread = threading.Thread(target=handle_client, args=(conn, addr, username, auth_hash))
         thread.start()
+
 
 def connect_to_peer(peer_ip, port):
     peer = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     peer.connect((peer_ip, port))
     return peer
 
-def chat_with_peer(peer, username):
+
+def chat_with_peer(peer, username, peer_username):
+    global auth_hash
+    chat_history = load_chat_history(auth_hash)
+
+    if peer_username in chat_history:
+        print("Chat history:")
+        for message in chat_history[peer_username]:
+            print(message)
+    else:
+        print(f"No previous chat history with {peer_username}.")
+
     while True:
         msg = input("Type your message (or type 'exit' to leave the chat): ")
         if msg.lower() == "exit":
@@ -49,6 +107,7 @@ def chat_with_peer(peer, username):
             break
         formatted_msg = f"{username}: {msg}"
         peer.send(formatted_msg.encode("utf-8"))
+        save_chat_history(auth_hash, peer_username, formatted_msg)
 
 
 def login():
@@ -62,6 +121,7 @@ def login():
     else:
         print("Invalid username or password.")
         return None, None
+
 
 def register():
     while True:
@@ -79,7 +139,9 @@ def register():
             print("Registration successful.")
             return auth_hash, user
 
+
 def main():
+    global auth_hash
     while True:
         print("\nCommands:\n1. Login\n2. Register\n")
         choice = input("Enter your choice (login/register): ").lower()
@@ -94,7 +156,7 @@ def main():
             print("Invalid choice. Try again.")
 
     print("\nWelcome, {}!".format(user['username']))
-    server_thread = threading.Thread(target=start_server, args=(user['username'], user['port']))
+    server_thread = threading.Thread(target=start_server, args=(user['username'], auth_hash, user['port']))
     server_thread.start()
 
     while True:
@@ -115,11 +177,12 @@ def main():
                 try:
                     peer_socket = connect_to_peer(peer['ip_address'], peer['port'])
                     print(f"Connected to {peer['username']}. Start chatting!")
-                    chat_with_peer(peer_socket, user['username'])
+                    chat_with_peer(peer_socket, user['username'], peer_username)
                 except ConnectionRefusedError:
                     print(f"{peer['username']} is offline.")
             else:
                 print("User not found.")
+
         elif choice == "logout":
             print("Logging out...")
             break
@@ -129,6 +192,6 @@ def main():
     print("Goodbye!")
     os._exit(0)
 
+
 if __name__ == "__main__":
     main()
-
